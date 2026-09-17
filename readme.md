@@ -1,3 +1,16 @@
+SSTA Filament Winder
+==========
+
+Overview
+--------
+
+SSTA is working to make our own in-house filament winder. This repository is going to have all of the code and information on how to run said filament winder. 
+
+Open Source Code
+--------
+
+We are using the Cyclone script that generates and executes winding paths created by Andrew Reilley. (See Below for info)
+
 Cyclone
 ==========
 
