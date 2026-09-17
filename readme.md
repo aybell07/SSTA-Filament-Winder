@@ -11,6 +11,11 @@ Open Source Code
 
 We are using the Cyclone script that generates and executes winding paths created by Andrew Reilley. (See Below for info)
 
+To Do
+--------
+- change the cyclone code to work with only 2 axes.
+- make a GUI
+
 Cyclone
 ==========
 
