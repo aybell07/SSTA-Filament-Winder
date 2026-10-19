@@ -202,57 +202,76 @@ With the README example (d = 69.75, L = 940, w = 7), one hoop pass is about 48,3
 
 #### `planHelicalLayer`: helical winding (the core of the planner)
 
-A helical layer lays tow at an angle `windAngle` measured from the mandrel's axis (55° in the README). One **circuit** has a "there" pass (carriage 0 → L) at +θ and a "back" pass (L → 0) at −θ. Together the circuits build a balanced ±θ ply. Enough circuits are wound, each shifted around the mandrel, to cover the whole surface.
+A helical layer lays tow at `windAngle` (θ), measured from the mandrel's axis: 0° is axial and 90° is hoop winding. The planner treats the mandrel as a constant-diameter cylinder and plans in two coordinates: carriage position along the axis, and mandrel rotation around it. A "there" pass moves the carriage from 0 to the full wind length while the mandrel keeps turning in one direction; the "back" pass reverses the carriage but keeps the mandrel turning in that same direction. That makes the two passes opposite-handed (+θ and −θ), producing a balanced pair of tow directions.
+
+##### Why this path follows from the winding angle
+
+Imagine cutting the cylinder lengthwise and unrolling its surface into a flat rectangle. Let `x` be distance along the mandrel and `u` be distance around the unrolled circumference. A constant-angle helix becomes a straight line on that rectangle. Since θ is measured from the axial direction, its slope is:
+
+```text
+du / dx = tan(θ)
+```
+
+So over an axial length `L`, the tow must travel `L·tan(θ)` along the cylindrical surface's circumference. The mandrel converts that surface distance into rotation: one full turn advances one circumference `C = π·d`, therefore the required rotation is `360·(L·tan(θ))/C` degrees. The planner spreads that rotation evenly over carriage travel, making every point on the pass have the same slope and thus the same ideal helix angle.
+
+This is why the code does not compute a series of Cartesian points on the cylinder. On an ideal cylinder, the unrolled path is a straight line, and synchronized linear motion of the carriage and mandrel reproduces it exactly (apart from machine resolution). A sampled or trigonometric point-by-point path would add commands without improving the ideal geometry. A different input convention is possible—for example, specifying turns per unit length or a desired number of circuits and deriving θ—but it describes the same family of paths with a different control parameter. This planner takes θ as the direct user input and solves for the rotation ratio.
+
+Keeping mandrel rotation in the same direction on the return is intentional: because carriage travel reverses while rotation does not, the slope's sign on the unrolled surface reverses, giving the opposite-handed tow path. Reversing the mandrel along with the carriage would keep the slope sign the same and produce another pass in the same direction family rather than the balanced ±θ pair. The delivery-head tilt is separate from this path geometry; it is an orientation adjustment for the tow head, not what establishes the surface helix angle.
 
 ##### Step 1: derived quantities
 
-Here is each formula with the README example worked through (d = 69.75, L = 940, tow w = 7, θ = 55°, leadIn = 30 mm, lock = 720°, leadOut = 90°, pattern = 2):
+For the README example (`d = 69.75 mm`, `L = 940 mm`, tow width `w = 7 mm`, θ = 55°, `leadInMM = 30 mm`, `lockDegrees = 720°`, `leadOutDegrees = 90°`, `patternNumber = 2`):
 
-| Variable | Formula | Meaning | Example |
+| Variable | Formula | What it controls | Example |
 |---|---|---|---|
-| `mandrelCircumference` | π·d | | 219.13 mm |
-| `towArcLength` | w / cos θ | How wide one band of tow is **measured around the circumference** when laid at angle θ. A slanted band covers more of the circumference than its own width. | 12.20 mm |
-| `numCircuits` | ceil(C / towArcLength) | How many side-by-side bands are needed to go all the way round. Rounded up, so bands overlap slightly. | ceil(17.96) = **18** |
-| `patternStepDegrees` | 360 / numCircuits | Angular width of one band, i.e. the shift between neighbouring bands | 20° |
-| `passRotationMM` | L · tan θ | How far the mandrel surface must travel while the carriage covers L to give angle θ (tan θ = circumferential / axial) | 1342.46 mm |
-| `passRotationDegrees` | 360 · passRotationMM / C | The same, in mandrel degrees | 2205.51° (6.13 turns) |
-| `passDegreesPerMM` | passRotationDegrees / L | Mandrel degrees per mm of carriage. This ratio is what fixes the wind angle. | 2.346 °/mm |
-| `deliveryHeadAngleDegrees` | −(90 − θ) | Head tilt during the pass so the tow band lies flat | −35° |
-| `deliveryHeadPassStartAngle` | −10 (hard-coded) | Head angle at the start/end of each pass | −10° |
-| `leadInDegrees` | passDegreesPerMM · leadInMM | Mandrel rotation during the first `leadInMM` of the pass | 70.39° |
-| `mainPassDegrees` | passDegreesPerMM · (L − leadInMM) | Mandrel rotation for the rest of the pass | 2135.12° |
-| `numberOfPatterns` | numCircuits / patternNumber | How many times the pattern repeats | 9 |
+| `mandrelCircumference` (`C`) | π·d | Surface distance represented by one mandrel turn | 219.13 mm |
+| `passRotationMM` | L·tan θ | Circumferential surface travel needed over axial length L | 1342.46 mm |
+| `passRotationDegrees` | 360·passRotationMM / C | Mandrel rotation over one full axial pass | 2205.51° (6.13 turns) |
+| `passDegreesPerMM` | passRotationDegrees / L = 360·tan θ / C | Rotation synchronized with each mm of carriage movement; fixes the angle | 2.346°/mm |
+| `towArcLength` | w / cos θ | Circumferential spacing between parallel paths for tow width w, whose width is measured perpendicular to its centerline | 12.20 mm |
+| `numCircuits` | ceil(C / towArcLength) | Number of evenly spaced start positions needed for nominal coverage; ceiling allows slight overlap rather than a gap | ceil(17.96) = **18** |
+| `patternStepDegrees` | 360 / numCircuits | Rotation offset between successive pattern starts | 20° |
+| `numberOfPatterns` | numCircuits / patternNumber | Number of repeats, provided the starts divide evenly into patterns | 9 |
+| `deliveryHeadAngleDegrees` | −(90 − θ) | Head tilt during a pass; separate from the carriage/mandrel path ratio | −35° |
+| `deliveryHeadPassStartAngle` | −10° (hard-coded) | Intermediate head angle at pass ends | −10° |
+| `leadInDegrees` | passDegreesPerMM·leadInMM | Mandrel rotation during the lead-in carriage travel | 70.39° |
+| `mainPassDegrees` | passDegreesPerMM·(L − leadInMM) | Remaining rotation while the carriage finishes the pass | 2135.12° |
 
-**Validation:** if `numCircuits` is not divisible by `patternNumber`, the function prints a warning and **returns without winding anything** for that layer. Planning of the other layers carries on. This means a bad pattern number gives a G-code file that is silently missing a layer, so check the console output. The usual fix is to change `windAngle` slightly or use a different `patternNumber`.
+The width projection follows from the same unrolled geometry. Tow width `w` is measured normal to the tow centerline. The normal component of a circumferential offset is that offset times `cos(θ)`, so parallel centerlines need a circumferential spacing of `w/cos(θ)` to be one tow-width apart. Dividing the circumference by that spacing estimates how many tracks make one coverage family. The `ceil` deliberately rounds up: the final spacing is then no greater than one tow width, giving slight overlap rather than leaving a theoretical gap. The actual deposited width and overlap can differ because tow compacts, spreads, and rides on prior layers; those effects are not modeled here.
+
+Each of the `numCircuits` start positions gets both a there and a back pass. Thus the two directions form two coverage families, one at +θ and one at −θ; they cross each other. The code's name "circuit" refers to a there/back pair, not to a single turn of the mandrel. `patternNumber` groups the evenly spaced starts into a repeatable winding pattern; it does not change the angle or tow-width calculation.
+
+**Validation:** if `numCircuits` is not divisible by `patternNumber`, the function prints a warning and returns without winding anything for that layer. Planning of the other layers carries on, so check the console output if a layer appears to be missing. The usual fix is to change `windAngle` slightly (which changes the calculated circuit count) or use a different `patternNumber`.
 
 ##### Step 2: optional initial near lock
 
-Unless `skipInitialNearLock` is true, the mandrel turns `lockDegrees` at carriage 0 and then G92-resets the mandrel to 0. This anchors the tow before the first pass. When several helical layers follow each other, the previous layer already finished with a lock, so this one can be skipped.
+Unless `skipInitialNearLock` is true, the mandrel turns `lockDegrees` at carriage 0 and then G92-resets the mandrel coordinate to 0. This anchors the tow before the first pass. When several helical layers follow each other, the previous layer already finished with a lock, so this one can be skipped.
 
 ##### Step 3: the nested loops
 
 ```
-for patternIndex in 0 .. numberOfPatterns-1:          // e.g. 9 times
-    for inPatternIndex in 0 .. patternNumber-1:        // e.g. 2 start positions
+for patternIndex in 0 .. numberOfPatterns-1:           // e.g. 9 pattern offsets
+    for inPatternIndex in 0 .. patternNumber-1:        // e.g. 2 starts within each pattern
         for pass in [there, back]:
-            (a) rotate mandrel to mandrelPositionDegrees, head → 0      ← finishes the previous lock
-            (b) tilt head to ±10°
-            (c) LEAD-IN : carriage → leadInEnd,  mandrel += leadInDegrees,  head → ±35°
-            (d) MAIN    : carriage → pass end,   mandrel += mainPassDegrees
-            (e) LEAD-OUT: mandrel += leadOutDegrees, head → ±10°            (carriage stopped)
-            mandrelPositionDegrees += lockDegrees − leadOutDegrees − (passRotationDegrees mod 360)
-        mandrelPositionDegrees += 360 / patternNumber      // jump to next start position
-    mandrelPositionDegrees += patternStepDegrees           // shift the whole pattern by one band
+            (a) rotate mandrel to mandrelPositionDegrees, head → 0   ← completes prior end lock
+            (b) tilt head to the pass-start angle
+            (c) LEAD-IN: carriage moves 30 mm, mandrel follows the same degrees/mm ratio,
+                         head transitions to its full pass tilt
+            (d) MAIN: carriage covers the remaining axial distance; mandrel follows the ratio
+            (e) LEAD-OUT: carriage stops, mandrel turns, head returns to its pass-start angle
+            update mandrelPositionDegrees to align the next pass after the lock
+        mandrelPositionDegrees += 180°                       // other start in this pattern
+    mandrelPositionDegrees += 20°                            // next pattern offset
 final lock (+lockDegrees, head → 0), then zeroAxes()
 ```
 
-`deliveryHeadSign` is +1 for the "there" pass and −1 for the "back" pass, so the head tilts one way going out and the opposite way coming back.
+For the example, there are nine pattern offsets separated by 20°. Each contains two starts 180° apart; the sequence is 0°, 180°, 20°, 200°, 40°, 220°, and so on. These 18 offsets are evenly distributed around the circumference in aggregate. `deliveryHeadSign` is +1 for the there pass and −1 for the back pass, so the head tilts one way going out and the opposite way coming back.
 
-Lead-in: during the first `leadInMM` of carriage travel the head swings from ±10° to ±35°, so the head does not snap to full angle at the start. Lead-out: during the first `leadOutDegrees` of the end lock it swings back to ±10°, and during the rest of the lock (step (a) of the *next* pass) it returns to 0.
+The lead-in is part of the angle-controlled winding path: it moves the carriage by `leadInMM` and rotates the mandrel by the same degrees/mm ratio as the main pass, while the head transitions from its start angle to full tilt. This avoids changing the tow-path slope during the lead-in. The lead-out happens with the carriage stopped: the mandrel advances `leadOutDegrees` while the head returns to its start angle. The remaining end-lock rotation is emitted as part of the move to the next pass, where the head returns to 0.
 
 ##### Step 4: the lock arithmetic
 
-This line is the least obvious one in the planner:
+The end-lock adjustment keeps each next pass's start phase predictable, even though a pass usually does not end on an integer mandrel turn. This line is the least obvious part:
 
 ```ts
 mandrelPositionDegrees += lockDegrees - leadOutDegrees - (passRotationDegrees % 360);
@@ -266,20 +285,20 @@ leadIn + main + leadOut + (lock − leadOut − passRot mod 360)
 = 360·floor(passRot/360) + lock
 ```
 
-So each pass, lock included, turns the mandrel by **a whole number of turns plus `lockDegrees`**. The actual dwell at the end is `lockDegrees − (passRot mod 360)`, which is shortened so that the next pass starts at a predictable angle. With `lockDegrees = 720` (a multiple of 360), **every pass starts at the same angle, mod 360, as the previous one.**
+So from the start of one pass to the next, the mandrel turns by a whole number of revolutions plus `lockDegrees`. The rotation after the tow-laying segment is `lockDegrees − (passRotationDegrees mod 360)`; the already-emitted `leadOutDegrees` is included in that amount. With `lockDegrees = 720` (a multiple of 360), every pass starts at the same angle modulo 360 as the previous one before the explicit pattern-start offset is applied.
 
 Example trace (mandrel angle mod 360 at the start of each pass):
 
 ```
-Pattern 1, circuit 1: there @ 0°,   back @ 0°      then += 360/2 = 180
-Pattern 1, circuit 2: there @ 180°, back @ 180°    then += 180 → 0, then += 20 (patternStep)
-Pattern 2, circuit 1: there @ 20°,  back @ 20°
-Pattern 2, circuit 2: there @ 200°, back @ 200°
+Pattern 1, start 1: there @ 0°,   back @ 0°       then += 180
+Pattern 1, start 2: there @ 180°, back @ 180°    then next pattern offset += 20
+Pattern 2, start 1: there @ 20°,  back @ 20°
+Pattern 2, start 2: there @ 200°, back @ 200°
 ...
-Pattern 9, circuit 2: there @ 340°, back @ 340°     → 18 start positions, 20° apart = full coverage
+Pattern 9, start 2: there @ 340°, back @ 340°    → 18 starts, 20° apart = full coverage
 ```
 
-The "jump to next start position" and "shift by patternStep" additions have no `move()` of their own. They are folded into step (a) of the next pass, so they become extra rotation during the near-end lock.
+The jump to the next start and the pattern offset do not have `move()` calls of their own. Their rotation is folded into step (a) of the next pass, so the mandrel repositions during the near-end lock.
 
 ##### About `patternNumber` and `skipIndex`
 
